@@ -1,0 +1,20 @@
+# Build output
+target/
+out/
+*.class
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# Runtime files produced by the app (logs, saved data) are not source
+*.log
+data/
+
+# OS noise
+.DS_Store
+Thumbs.db
