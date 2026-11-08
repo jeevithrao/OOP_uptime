@@ -1,67 +1,62 @@
 import exception.InvalidServiceException;
-import exception.MonitorException;
+import healthcheck.HealthChecker;
+import healthcheck.HealthCheckerFactory;
+import healthcheck.HealthResult;
 import model.ApiService;
 import model.CacheService;
 import model.DatabaseService;
+import model.ServiceStatus;
 import model.Service;
 
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 /**
- * TEMPORARY Phase 1 runner. It only proves the Service hierarchy works.
- * It is replaced by the real console menu in Phase 4.
+ * TEMPORARY Phase 2 runner: shows the Strategy pattern at work. Replaced by the real menu in Phase 4.
  */
 public class Main {
 
-    private static final int REQUESTS = 12;
+    private static final int CHECKS = 200;
 
     public static void main(String[] args) throws InvalidServiceException {
-        // One Random per service, each with its own seed: reproducible, and services do not
-        // disturb each other's random sequence.
-        List<Service> services = List.of(
-                new DatabaseService("db-1", "Orders DB", new Random(1)),
-                new ApiService("api-1", "Payments API", new Random(2)),
-                new CacheService("cache-1", "Session Cache", new Random(3)));
-
-        System.out.println("=== 1. Polymorphism: same call, different behaviour ===");
-        for (Service s : services) {
-            System.out.println(s);
-            for (int i = 1; i <= REQUESTS; i++) {
-                System.out.println("   request " + i + ": " + request(s));
+        System.out.println("=== 1. Strategy: same services, same random seeds, different checker ===");
+        for (String type : List.of("basic", "latency")) {
+            HealthChecker checker = HealthCheckerFactory.create(type);   // factory picks the class
+            System.out.println("\nchecker = " + type + " (" + checker.getClass().getSimpleName() + ")");
+            for (Service s : newServices()) {                            // fresh services = same sequence
+                Map<ServiceStatus, Integer> tally = new EnumMap<>(ServiceStatus.class);
+                for (int i = 0; i < CHECKS; i++) {
+                    tally.merge(checker.check(s).getStatus(), 1, Integer::sum);
+                }
+                System.out.printf("   %-14s UP=%-3d DEGRADED=%-3d DOWN=%-3d%n", s.getName(),
+                        tally.getOrDefault(ServiceStatus.UP, 0),
+                        tally.getOrDefault(ServiceStatus.DEGRADED, 0),
+                        tally.getOrDefault(ServiceStatus.DOWN, 0));
             }
         }
 
-        System.out.println("\n=== 2. Demo mode: forceFailure ===");
-        Service api = services.get(1);
-        api.setForceFailure(true);
-        System.out.println("forced : " + request(api));
-        api.setForceFailure(false);
-        System.out.println("cleared: " + request(api));
+        System.out.println("\n=== 2. A few individual results (latency checker, Payments API) ===");
+        HealthChecker latency = HealthCheckerFactory.create("latency");
+        Service api = newServices().get(1);
+        for (int i = 1; i <= 8; i++) {
+            HealthResult r = latency.check(api);
+            System.out.println("   check " + i + ": " + r);
+        }
 
-        System.out.println("\n=== 3. Validation ===");
-        tryCreate("blank id", () -> new CacheService("  ", "x", new Random()));
-        tryCreate("rate 1.5", () -> new CacheService("c", "x", 1.5, new Random()));
-        tryCreate("rate NaN", () -> new CacheService("c", "x", Double.NaN, new Random()));
-    }
-
-    /** Calls the service and turns the outcome into a printable string. */
-    private static String request(Service s) {
+        System.out.println("\n=== 3. Factory rejects unknown types ===");
         try {
-            return "OK   " + s.simulateRequest() + " ms";
-        } catch (MonitorException e) {
-            return "FAIL " + e.getClass().getSimpleName() + " - " + e.getMessage();
+            HealthCheckerFactory.create("fancy");
+        } catch (IllegalArgumentException e) {
+            System.out.println("   rejected: " + e.getMessage());
         }
     }
 
-    private interface Creator { Service create() throws InvalidServiceException; }
-
-    private static void tryCreate(String label, Creator c) {
-        try {
-            c.create();
-            System.out.println(label + ": created (unexpected)");
-        } catch (InvalidServiceException e) {
-            System.out.println(label + ": rejected - " + e.getMessage());
-        }
+    private static List<Service> newServices() throws InvalidServiceException {
+        return List.of(
+                new DatabaseService("db-1", "Orders DB", new Random(1)),
+                new ApiService("api-1", "Payments API", new Random(2)),
+                new CacheService("cache-1", "Session Cache", new Random(3)));
     }
 }
