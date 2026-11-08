@@ -40,3 +40,31 @@ Every non-obvious choice, with the reason. Useful for the viva.
 | Unknown checker type throws `IllegalArgumentException` | The type comes from code or config, not from the "add service" form, so `InvalidServiceException` would be the wrong meaning. |
 | Tests use a `StubService` with controlled behaviour | Boundary rules (400 vs 401 ms) need exact latencies. The Phase 1 template-method design makes a stub trivial to write. |
 | Mutation check done: changing `>` to `>=` fails the boundary test | Confirms the test can actually fail, so a pass means something. |
+
+## Phase 3: Incidents and alerts
+| Decision | Why |
+|---|---|
+| Incident opens when the failure streak is `>= threshold` (default 3), not `== threshold` | If the threshold is lowered mid-streak (menu option 8), `==` could be skipped over and never fire. |
+| DEGRADED resets the streak and resolves an open incident | It is a success (`HealthResult.isSuccess()`). Slow is not down. |
+| Streak stored in `Map<String,Integer>`; a success *removes* the entry | The map holds only services currently failing, so it cannot grow without bound. |
+| At most one open incident per service (`Map<String,Incident>`), further failures only increment `failureCount` | Prevents alert storms: one outage, one OPENED alert, one RESOLVED alert. |
+| `failureCount` includes the failures that opened the incident | It equals the "downtime in rounds" shown on recovery. |
+| Incident start time = timestamp of the check that crossed the threshold; end time = first successful check | Taken from the `HealthResult`, not the clock, so tests are deterministic and the times match the checks. |
+| Incident stores `serviceId` and `serviceName` as strings, not a `Service` reference | It is a historical record: it stays valid after the service is removed, and saves easily as CSV. It also keeps the `incident` package independent of `Service`. |
+| `Incident` mutators are package-private; the constructor that restores saved data is public | Listeners (other packages) get a read-only view. Only `IncidentManager` can change state. Storage can still rebuild incidents. |
+| `Incident` constructor rejects impossible states (OPEN with an end time, RESOLVED without one, end before start) | A corrupted save file cannot produce a broken object. |
+| `getEndTime()` returns `Optional` | An open incident has no end time; `Optional` forces callers to handle that. |
+| `recordResult(result, serviceName)` takes the name as an argument | `HealthResult` only has the id. Passing the name keeps `IncidentManager` independent of `Service`. (A resolver hook was tried first and removed: more moving parts for no benefit.) |
+| State is updated BEFORE listeners are notified | A listener that inspects the manager always sees the new state. |
+| Each listener call is wrapped in `try/catch (RuntimeException)`; the manager iterates over a copy of the list | One broken channel (e.g. unwritable file) must not stop monitoring or starve the other channels, and a listener may unregister itself during a callback. |
+| `getHistory()` returns an unmodifiable view | Callers can read history but not rewrite it. |
+| `Notifier` is an abstract class (template method), not just an interface | Alert wording is written once so all channels agree. Subclasses implement only `deliver()`. The manager still depends only on the `IncidentListener` interface. |
+| Notifier output streams and the file path are injected | Tests capture output and use temp files; nothing is hard-wired to `System.out`. |
+| `FileNotifier` throws `UncheckedIOException` | Listener methods cannot throw checked exceptions. The manager's per-listener catch handles it. (`StorageException` is reserved for the storage module.) |
+| Threshold / null arguments throw `IllegalArgumentException` | They are programming-contract violations. The Phase 4 menu validates user input before calling. |
+| 28 new tests, plus 4 mutation checks (no streak reset, `>` vs `>=`, never removing the open incident, uncaught listener errors) | Each deliberate bug made tests fail, proving the suite detects real mistakes. |
+
+### Notes carried into Phase 4
+- The engine should print a check's result line **before** calling `recordResult`, so the alert appears after the round line, as in the sample output.
+- When a service is removed (menu option 2), the engine must decide what happens to its streak and any open incident. `IncidentManager` has no `forget(serviceId)` yet.
+- Incident ids restart at `INC-1` on each run. Phase 5 must continue numbering after loading saved incidents.

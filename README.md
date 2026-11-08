@@ -26,7 +26,7 @@ polymorphism, design patterns (Singleton, Factory, Strategy, Observer) and UML.
 - [x] Phase 0: project skeleton
 - [x] Phase 1: foundation (enums, exceptions, service hierarchy)
 - [x] Phase 2: health checking
-- [ ] Phase 3: incidents and alerts
+- [x] Phase 3: incidents and alerts
 - [ ] Phase 4: engine and console menu
 - [ ] Phase 5: reports and storage
 - [ ] Phase 6: UML and documentation
