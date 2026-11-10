@@ -259,4 +259,48 @@ class IncidentManagerTest {
         assertThrows(IllegalArgumentException.class, () ->
                 new Incident("I", "a", "A", T0, null, IncidentStatus.OPEN, 0));
     }
+
+    // ---------- forgetService (used when a service is removed) ----------
+
+    @Test
+    void forgetService_closesTheOpenIncidentWithANote_clearsTheStreak_andDoesNotNotify() {
+        feed("a", DOWN, DOWN, DOWN);
+        java.util.Optional<Incident> closed = manager.forgetService("a", T0.plusSeconds(10), "service removed");
+
+        assertTrue(closed.isPresent());
+        assertEquals(IncidentStatus.RESOLVED, closed.get().getStatus());
+        assertEquals("service removed", closed.get().getResolutionNote());
+        assertEquals(T0.plusSeconds(10), closed.get().getEndTime().get());
+        assertEquals(0, manager.getConsecutiveFailures("a"));
+        assertTrue(manager.getOpenIncidents().isEmpty());
+        assertEquals(List.of("OPENED INC-1"), listener.events);   // no RESOLVED: the service did not recover
+    }
+
+    @Test
+    void forgetService_withNoOpenIncident_returnsEmptyButStillClearsTheStreak() {
+        feed("a", DOWN, DOWN);
+        assertTrue(manager.forgetService("a", T0, "gone").isEmpty());
+        assertEquals(0, manager.getConsecutiveFailures("a"));
+        feed("a", DOWN, DOWN);                                     // a fresh streak of 2, so still no incident
+        assertTrue(manager.getHistory().isEmpty());
+    }
+
+    @Test
+    void forgetService_neverProducesAnEndTimeBeforeTheStart() {
+        feed("a", DOWN, DOWN, DOWN);
+        Incident closed = manager.forgetService("a", T0.minusDays(1), "clock quirk").get();
+        assertEquals(closed.getStartTime(), closed.getEndTime().get());
+    }
+
+    @Test
+    void aNormalRecoveryHasNoResolutionNote() {
+        feed("a", DOWN, DOWN, DOWN, UP);
+        assertEquals("", manager.getHistory().get(0).getResolutionNote());
+    }
+
+    @Test
+    void anOpenIncidentCannotCarryAResolutionNote() {
+        assertThrows(IllegalArgumentException.class, () ->
+                new Incident("I", "a", "A", T0, null, IncidentStatus.OPEN, 3, "why"));
+    }
 }

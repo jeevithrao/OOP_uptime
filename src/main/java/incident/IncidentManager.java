@@ -2,11 +2,13 @@ package incident;
 
 import healthcheck.HealthResult;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Decides when an outage is real and tells listeners about it (Subject in the Observer pattern).
@@ -82,6 +84,25 @@ public class IncidentManager {
             history.add(incident);
             notifyOpened(incident);
         }
+    }
+
+    /**
+     * Called when a service is removed: clears its failure streak and closes any open incident
+     * with the given reason. Listeners are NOT notified: the service did not recover, so a
+     * "RECOVERED" alert would be false.
+     *
+     * @return the incident that was closed, if there was one
+     */
+    public Optional<Incident> forgetService(String serviceId, LocalDateTime when, String reason) {
+        consecutiveFailures.remove(serviceId);
+        Incident open = openIncidents.remove(serviceId);
+        if (open == null) {
+            return Optional.empty();
+        }
+        // Clamp so a clock quirk can never produce an end time before the start time.
+        LocalDateTime end = when.isBefore(open.getStartTime()) ? open.getStartTime() : when;
+        open.resolve(end, reason);
+        return Optional.of(open);
     }
 
     // ---------------- observer registration ----------------

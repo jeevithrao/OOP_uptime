@@ -68,3 +68,34 @@ Every non-obvious choice, with the reason. Useful for the viva.
 - The engine should print a check's result line **before** calling `recordResult`, so the alert appears after the round line, as in the sample output.
 - When a service is removed (menu option 2), the engine must decide what happens to its streak and any open incident. `IncidentManager` has no `forget(serviceId)` yet.
 - Incident ids restart at `INC-1` on each run. Phase 5 must continue numbering after loading saved incidents.
+
+## Phase 4: Engine, factory, logger and menu
+| Decision | Why |
+|---|---|
+| `MonitoringEngine` is a lazy, synchronized Singleton, but its constructor is package-private and takes all dependencies | One coordinator in production; tests build engines with their own collaborators. The pattern is kept without making the engine untestable. |
+| `initialize(long seed)` creates the engine in demo mode, and throws if the engine already exists | Seeded randomness must be set up before first use; failing loudly beats silently ignoring the seed. |
+| Default wiring (console + file + simulated email alerts, latency checker) lives in `createDefault()` | One place to see how the modules are connected. |
+| The engine only connects modules: check -> record verdict -> incident logic | It holds no health or incident rules, as the module table requires. |
+| `ServiceFactory` gives every service its own `Random`, seeded from one master `Random` | Seed the master and the whole session repeats; services still do not disturb each other's sequences. |
+| `ServiceFactory` validates the type BEFORE drawing a seed | A mistyped type must not change the randomness of later services. A test pins this. |
+| Type names `database` / `db`, `api`, `cache`; unknown type throws `InvalidServiceException` | The type comes from user input, so it uses the checked exception meant for bad input. |
+| `AppLogger` is an eagerly created Singleton; its log methods never throw | Logging must not be able to break monitoring. An unwritable file produces one stderr warning, then the app continues. |
+| `AppLogger.setLogFile()` exists | Tests (and a future config) can redirect the log; without it the singleton would write into the project during tests. |
+| The engine logs incidents by registering an `IncidentListener` | The log is just another observer. It needed no new mechanism, and the manager stays unaware of it. |
+| `LinkedHashMap` for services | A `HashMap` that remembers insertion order, so listings are stable. |
+| Engine keeps every `HealthResult` per service in a `List`, exposed read-only | Phase 5 reports read this; callers cannot rewrite history. Dropped when the service is removed so a reused id starts clean. |
+| `addService(Service)` is public alongside `addService(type, id, name)` | The file loader (Phase 5) will hand over ready-made services, and tests inject controlled ones. |
+| `CheckObserver` callback runs after the result is recorded but BEFORE the incident logic | The menu prints "[Round 4] ... FAIL" before the alert it triggers, as in the sample output. The streak it receives adds the current failure by hand, because the manager has not counted it yet. A test pins the ordering. |
+| Removing a service with an open incident: close it with the note "Service removed while incident was open", clear the streak, send NO recovered alert | The service did not recover, so a RECOVERED alert would be false; nothing should stay open for a service that no longer exists. `Incident` gained a `resolutionNote` for this. |
+| `IncidentManager.forgetService()` clamps the end time to the start time if needed | A clock quirk can never produce an incident that ends before it starts. |
+| Menu lives in a new `console` package, with injected input and output streams | Keeps `Main` thin and lets tests script whole sessions (12 menu tests). Deviation from the plan's package list. |
+| End of input (Ctrl+D / Ctrl+Z) exits cleanly through a private exception | No stack trace for a normal way to leave. |
+| Round count limited to 1 to 1000 | A mistyped huge number would flood the screen. |
+| Option 7 (reports) prints "not implemented yet" | Reports are Phase 5. Saying so is more honest than faking output. |
+| `Main` only parses `--seed N` and starts the menu | The plan's tip: if the menu contains business logic, the modules are not independent. |
+| 48 new tests plus 5 mutation checks (verdict not recorded, streak off by one, incident left open on removal, seed drawn too early, alert before round line) | Each injected bug made tests fail, so a green suite means something. |
+
+### Notes carried into Phase 5
+- `ReportGenerator` should average response time over successful results only (failed checks record 0 ms).
+- Loading saved incidents must continue numbering after the highest saved `INC-n`; `IncidentManager` has no way to restore history yet.
+- `Incident` has a public constructor with `resolutionNote`, ready for CSV loading.

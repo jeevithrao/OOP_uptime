@@ -24,15 +24,22 @@ public class Incident {
     private LocalDateTime endTime;      // null while OPEN
     private IncidentStatus status;
     private int failureCount;           // failed checks during this incident, including the ones that opened it
+    private String resolutionNote;      // why it was closed when that was not a normal recovery; "" otherwise
 
     /** Opens a new incident. Package-private: only IncidentManager creates live incidents. */
     Incident(String id, String serviceId, String serviceName, LocalDateTime startTime, int failureCount) {
         this(id, serviceId, serviceName, startTime, null, IncidentStatus.OPEN, failureCount);
     }
 
-    /** Full constructor, public so storage can rebuild saved incidents (Phase 5). */
+    /** Same as the full constructor, with no resolution note. */
     public Incident(String id, String serviceId, String serviceName, LocalDateTime startTime,
                     LocalDateTime endTime, IncidentStatus status, int failureCount) {
+        this(id, serviceId, serviceName, startTime, endTime, status, failureCount, "");
+    }
+
+    /** Full constructor, public so storage can rebuild saved incidents (Phase 5). */
+    public Incident(String id, String serviceId, String serviceName, LocalDateTime startTime,
+                    LocalDateTime endTime, IncidentStatus status, int failureCount, String resolutionNote) {
         requireText(id, "id");
         requireText(serviceId, "serviceId");
         requireText(serviceName, "serviceName");
@@ -40,8 +47,12 @@ public class Incident {
         if (status == null) throw new IllegalArgumentException("status must not be null");
         if (failureCount < 1) throw new IllegalArgumentException("failureCount must be at least 1: " + failureCount);
         // Reject impossible combinations so a corrupted save file cannot create a broken incident.
+        String note = resolutionNote == null ? "" : resolutionNote;
         if (status == IncidentStatus.OPEN && endTime != null) {
             throw new IllegalArgumentException("An OPEN incident cannot have an end time");
+        }
+        if (status == IncidentStatus.OPEN && !note.isEmpty()) {
+            throw new IllegalArgumentException("An OPEN incident cannot have a resolution note");
         }
         if (status == IncidentStatus.RESOLVED) {
             if (endTime == null) throw new IllegalArgumentException("A RESOLVED incident needs an end time");
@@ -54,6 +65,7 @@ public class Incident {
         this.endTime = endTime;
         this.status = status;
         this.failureCount = failureCount;
+        this.resolutionNote = note;
     }
 
     private static void requireText(String value, String field) {
@@ -68,11 +80,17 @@ public class Incident {
 
     /** Closes the incident at the time of the first successful check. */
     void resolve(LocalDateTime endTime) {
+        resolve(endTime, "");
+    }
+
+    /** Closes the incident and records why, for closures that are not a normal recovery. */
+    void resolve(LocalDateTime endTime, String note) {
         requireOpen();
         if (endTime == null) throw new IllegalArgumentException("endTime must not be null");
         if (endTime.isBefore(startTime)) throw new IllegalArgumentException("endTime is before startTime");
         this.endTime = endTime;
         this.status = IncidentStatus.RESOLVED;
+        this.resolutionNote = note == null ? "" : note;
     }
 
     private void requireOpen() {
@@ -97,6 +115,9 @@ public class Incident {
     public boolean isOpen() { return status == IncidentStatus.OPEN; }
 
     public int getFailureCount() { return failureCount; }
+
+    /** Empty for a normal recovery; explains the closure otherwise (e.g. the service was removed). */
+    public String getResolutionNote() { return resolutionNote; }
 
     @Override
     public String toString() {
