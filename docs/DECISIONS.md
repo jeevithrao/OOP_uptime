@@ -99,3 +99,30 @@ Every non-obvious choice, with the reason. Useful for the viva.
 - `ReportGenerator` should average response time over successful results only (failed checks record 0 ms).
 - Loading saved incidents must continue numbering after the highest saved `INC-n`; `IncidentManager` has no way to restore history yet.
 - `Incident` has a public constructor with `resolutionNote`, ready for CSV loading.
+
+## Phase 5: Reports and storage
+| Decision | Why |
+|---|---|
+| `ReportGenerator` is a final class of pure static functions over plain lists | The module table says Report must not modify data and must stay independent: it knows nothing about the engine, files or console. |
+| `ServiceReport` is a Java record with `Optional` fields for "may not exist" values | A record is an immutable value carrier in one declaration. `Optional` makes "no data" different from "0%" (a service never checked is not a service that always fails). |
+| Uptime % = successful / total x 100, where DEGRADED counts as successful | Same rule as `HealthResult.isSuccess()` and the incident logic, so all three modules agree. |
+| Average and slowest response time use successful checks only | Failed checks store 0 ms; counting them would make a failing service look fast. A test pins this. |
+| "Recent uptime" over the last 10 checks, computed with an `ArrayDeque` sliding window | Overall uptime hides a recovery (or a collapse); the recent figure shows current health. The deque holds at most N items and drops the oldest in O(1), which is why it was chosen over a list. |
+| Ranking by `Comparator` (uptime, response time, name), with services lacking data always last and name/id as tie-breakers | Gives a total, stable order; `sort()` returns a new list and leaves the input alone. |
+| The engine depends on a `Storage` interface; `FileStorage` implements it | The engine never knows about CSV, and tests use an in-memory version that can be told to fail. |
+| Saved data is plain records (`ServiceRecord`, `StorageData`), not live objects | A `Service` carries a `Random` and demo switches. The engine rebuilds real services through `ServiceFactory`. |
+| Hand-written `Csv` helper with quoting | Names and error messages contain commas and quotes ("Payments, EU"); splitting on commas would corrupt them silently. Line breaks are replaced by spaces because files are read line by line. |
+| Files are written to a `.tmp` file, then moved over the real one (atomic move, with a fallback) | A crash mid-write cannot leave a truncated data file; the old file stays intact until the new one is complete. |
+| A missing file means "nothing saved yet", not an error | The first run must start cleanly. |
+| Parse errors name the file and line; `Incident`/`HealthResult` validation errors are wrapped the same way | The user can find and fix the bad line. Domain classes keep their own rules, so storage contains none. |
+| `Engine.load()` is all-or-nothing (build and validate first, commit last) and refuses a non-empty engine | Bad data must never leave a half-loaded engine. `restoreHistory()` also validates before changing anything. |
+| A corrupt file stops the program at startup instead of starting empty | The next save would overwrite the corrupt file. Stopping keeps the evidence. |
+| Open incidents are restored as open, with the streak set to their failure count | An outage that was ongoing when the program stopped is still ongoing; the next success resolves it. |
+| An open incident whose service is missing is closed with the note "Service missing when saved data was loaded" | It can never recover, so it must not stay open forever. |
+| Results of unknown services are ignored (and logged) | They can only come from a partial save or a hand-edited file; they cannot be attached to anything. |
+| Incident numbering continues after the highest saved `INC-n` | Ids stay unique across sessions. |
+| Not saved: force-failure switches, threshold, round counter | The first is a demo switch, the second is a setting, the third belongs to one session. Saving them would add format and migration cost for little value. |
+| Menu saves after add, remove and each check round, and on exit (including end of input); a failed save prints a warning and the program carries on | A crash loses at most the current action. Read-only actions (list, view, reports, threshold, force) do not save. |
+| Demo mode (`--seed`) starts empty and uses `data-demo/` | Demos are reproducible and can never overwrite real data. |
+| 19 new tests plus 7 mutation checks (average includes failures, uptime ignores degraded, ranking reversed, CSV unquoted, open incidents of missing services kept, numbering restarts, no save after a run) | Each injected bug made tests fail. |
+| End-to-end check with two real processes sharing a `data/` folder, then a corrupted file | Proves the data really survives a restart, beyond what unit tests with in-memory fakes can show. |

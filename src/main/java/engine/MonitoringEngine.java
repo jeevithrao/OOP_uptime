@@ -1,6 +1,7 @@
 package engine;
 
 import exception.InvalidServiceException;
+import exception.StorageException;
 import healthcheck.HealthChecker;
 import healthcheck.HealthCheckerFactory;
 import healthcheck.HealthResult;
@@ -12,7 +13,13 @@ import model.ServiceFactory;
 import notification.ConsoleNotifier;
 import notification.EmailNotifier;
 import notification.FileNotifier;
+import report.ReportGenerator;
+import report.ServiceReport;
 import storage.AppLogger;
+import storage.FileStorage;
+import storage.ServiceRecord;
+import storage.Storage;
+import storage.StorageData;
 
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -44,6 +51,9 @@ public class MonitoringEngine {
     }
 
     public static final String DEFAULT_CHECKER = "latency";
+    /** Normal runs keep their data here; demo runs use a separate folder so they never touch real data. */
+    public static final Path DEFAULT_DATA_DIR = Path.of("data");
+    public static final Path DEMO_DATA_DIR = Path.of("data-demo");
 
     private static MonitoringEngine instance;
 
@@ -51,6 +61,7 @@ public class MonitoringEngine {
     private final HealthChecker checker;
     private final IncidentManager incidentManager;
     private final AppLogger logger;
+    private final Storage storage;
 
     // LinkedHashMap is a HashMap that remembers insertion order, so listings are stable.
     private final Map<String, Service> services = new LinkedHashMap<>();
@@ -63,10 +74,12 @@ public class MonitoringEngine {
      * collaborators. That keeps the Singleton while every dependency stays injectable.
      */
     MonitoringEngine(ServiceFactory serviceFactory, HealthChecker checker,
-                     IncidentManager incidentManager, AppLogger logger) {
-        if (serviceFactory == null || checker == null || incidentManager == null || logger == null) {
+                     IncidentManager incidentManager, AppLogger logger, Storage storage) {
+        if (serviceFactory == null || checker == null || incidentManager == null
+                || logger == null || storage == null) {
             throw new IllegalArgumentException("engine dependencies must not be null");
         }
+        this.storage = storage;
         this.serviceFactory = serviceFactory;
         this.checker = checker;
         this.incidentManager = incidentManager;
@@ -92,7 +105,7 @@ public class MonitoringEngine {
 
     public static synchronized MonitoringEngine getInstance() {
         if (instance == null) {
-            instance = createDefault(new Random());
+            instance = createDefault(new Random(), DEFAULT_DATA_DIR);
         }
         return instance;
     }
@@ -102,18 +115,19 @@ public class MonitoringEngine {
         if (instance != null) {
             throw new IllegalStateException("MonitoringEngine already created; initialize() must come first");
         }
-        instance = createDefault(new Random(seed));
+        instance = createDefault(new Random(seed), DEMO_DATA_DIR);
         return instance;
     }
 
     /** The production wiring: console + file + simulated email alerts, latency-aware checking. */
-    private static MonitoringEngine createDefault(Random master) {
+    private static MonitoringEngine createDefault(Random master, Path dataDir) {
         IncidentManager manager = new IncidentManager();
         manager.addListener(new ConsoleNotifier());
         manager.addListener(new FileNotifier(Path.of("data", "alerts.log")));
         manager.addListener(new EmailNotifier("ops@example.com"));
         return new MonitoringEngine(new ServiceFactory(master),
-                HealthCheckerFactory.create(DEFAULT_CHECKER), manager, AppLogger.getInstance());
+                HealthCheckerFactory.create(DEFAULT_CHECKER), manager, AppLogger.getInstance(),
+                new FileStorage(dataDir));
     }
 
     // ---------------- managing services ----------------
@@ -222,7 +236,105 @@ public class MonitoringEngine {
         }
     }
 
-    // ---------------- read access for the menu and reports ----------------
+    // ---------------- reports ----------------
+
+    /** One report per service, in insertion order. Read-only: nothing is modified. */
+    public List<ServiceReport> getReports() {
+        List<Incident> history = incidentManager.getHistory();
+        List<ServiceReport> reports = new ArrayList<>();
+        for (Service service : services.values()) {
+            reports.add(ReportGenerator.forService(service.getId(), service.getName(),
+                    results.get(service.getId()), history));
+        }
+        return reports;
+    }
+
+    // ---------------- saving and loading ----------------
+
+    /** Writes services, all check results and the incident history through the Storage. */
+    public void save() throws StorageException {
+        List<ServiceRecord> records = new ArrayList<>();
+        List<HealthResult> allResults = new ArrayList<>();
+        for (Service service : services.values()) {
+            String type;
+            try {
+                type = ServiceFactory.typeNameOf(service);
+            } catch (IllegalArgumentException e) {
+                throw new StorageException("Cannot save service '" + service.getId() + "': " + e.getMessage(), e);
+            }
+            records.add(new ServiceRecord(type, service.getId(), service.getName(),
+                    service.getFailureRate(), service.getStatus()));
+            allResults.addAll(results.get(service.getId()));
+        }
+        try {
+            storage.save(new StorageData(records, allResults, incidentManager.getHistory()));
+        } catch (StorageException e) {
+            logger.error("Save failed: " + e.getMessage());
+            throw e;
+        }
+        logger.info("Saved " + records.size() + " service(s), " + allResults.size() + " result(s), "
+                + incidentManager.getHistory().size() + " incident(s)");
+    }
+
+    /**
+     * Restores saved data into this (empty) engine. All-or-nothing: everything is built and checked
+     * first, and only then put in place, so bad data never leaves the engine half-loaded.
+     * Not restored on purpose: demo force-failure switches, the failure threshold, and the round
+     * counter (a round number belongs to one session).
+     */
+    public void load() throws StorageException {
+        if (!services.isEmpty() || !incidentManager.getHistory().isEmpty()) {
+            throw new IllegalStateException("load() must be called on an empty engine");
+        }
+        StorageData data = storage.load();
+
+        // Step 1: rebuild the services in a local map. Any invalid record aborts before anything changes.
+        Map<String, Service> loaded = new LinkedHashMap<>();
+        for (ServiceRecord record : data.services()) {
+            try {
+                Service service = serviceFactory.create(record.type(), record.id(), record.name(), record.failureRate());
+                service.setStatus(record.status());
+                if (loaded.putIfAbsent(service.getId(), service) != null) {
+                    throw new StorageException("Saved data lists service '" + service.getId() + "' twice");
+                }
+            } catch (InvalidServiceException e) {
+                throw new StorageException("Saved service '" + record.id() + "' is invalid: " + e.getMessage(), e);
+            }
+        }
+
+        // Step 2: restore incidents. The manager validates everything first and changes nothing on failure.
+        try {
+            incidentManager.restoreHistory(data.incidents());
+        } catch (IllegalArgumentException e) {
+            throw new StorageException("Saved incidents are inconsistent: " + e.getMessage(), e);
+        }
+
+        // Step 3: nothing can fail from here on, so commit.
+        for (Service service : loaded.values()) {
+            services.put(service.getId(), service);
+            results.put(service.getId(), new ArrayList<>());
+        }
+        int ignored = 0;
+        for (HealthResult result : data.results()) {
+            List<HealthResult> list = results.get(result.getServiceId());
+            if (list == null) {
+                ignored++;                 // belongs to a service that is no longer saved
+            } else {
+                list.add(result);
+            }
+        }
+        // An open incident for a service that no longer exists can never recover, so close it.
+        for (Incident open : new ArrayList<>(incidentManager.getOpenIncidents())) {
+            if (!services.containsKey(open.getServiceId())) {
+                incidentManager.forgetService(open.getServiceId(), LocalDateTime.now(),
+                        "Service missing when saved data was loaded");
+            }
+        }
+        logger.info("Loaded " + services.size() + " service(s) and " + incidentManager.getHistory().size()
+                + " incident(s)" + (ignored > 0 ? "; ignored " + ignored + " result(s) of unknown services" : ""));
+    }
+
+    // ---------------- read access for the menu ----------------
 
     public int getRoundCount() { return roundCounter; }
 

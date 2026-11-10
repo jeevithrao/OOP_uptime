@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Drives the real menu with scripted input. Lives in package engine to reach the engine's test constructor. */
 class ConsoleMenuTest {
 
+    private final InMemoryStorage storage = new InMemoryStorage();
     private MonitoringEngine engine;
     private ByteArrayOutputStream buffer;
     private PrintStream out;
@@ -38,7 +39,7 @@ class ConsoleMenuTest {
         IncidentManager manager = new IncidentManager();
         manager.addListener(new ConsoleNotifier(out));          // alerts land in the same captured output
         engine = new MonitoringEngine(new ServiceFactory(new Random(1)),
-                HealthCheckerFactory.create("latency"), manager, AppLogger.getInstance());
+                HealthCheckerFactory.create("latency"), manager, AppLogger.getInstance(), storage);
     }
 
     @AfterEach
@@ -168,5 +169,72 @@ class ConsoleMenuTest {
         int count = 0;
         for (int i = text.indexOf(part); i >= 0; i = text.indexOf(part, i + 1)) count++;
         return count;
+    }
+
+    // ---------- reports ----------
+
+    @Test
+    void reportsExplainWhenThereAreNoServices() {
+        assertTrue(run("7", "0").contains("No services yet"));
+    }
+
+    @Test
+    void reportsShowUptimeAndResponseTimesForCheckedServices() throws InvalidServiceException {
+        presetReliableService();
+        engine.runRounds(2, null);
+        String output = run("7", "", "0");          // blank choice = default ranking
+        assertTrue(output.contains("UPTIME"));
+        assertTrue(output.contains("100.0%"));
+        assertTrue(output.contains("Cache"));
+    }
+
+    @Test
+    void aServiceWithNoChecksShowsNaInsteadOfZero() throws InvalidServiceException {
+        presetReliableService();
+        String output = run("7", "3", "0");
+        assertTrue(output.contains("n/a"));
+        assertFalse(output.contains("0.0%"));
+    }
+
+    @Test
+    void anUnknownRankingChoiceFallsBackToUptime() throws InvalidServiceException {
+        presetReliableService();
+        assertTrue(run("7", "x", "0").contains("ranking by uptime"));
+    }
+
+    // ---------- saving ----------
+
+    @Test
+    void savesAfterAChangeAndOnExit() {
+        String output = run("1", "cache", "c-9", "Nine", "0");
+        assertEquals(2, storage.saveCount);                       // after the add, and on exit
+        assertEquals(1, storage.saved.services().size());
+        assertTrue(output.contains("Data saved."));
+    }
+
+    @Test
+    void everyDataChangingActionSaves_andReadOnlyActionsDoNot() throws InvalidServiceException {
+        presetReliableService();
+        run("3", "6", "7", "", "8", "5", "9", "c-1", "0");        // list, incidents, reports, threshold, force
+        assertEquals(1, storage.saveCount);                       // only the exit save
+
+        storage.saveCount = 0;
+        run("4", "5", "2", "2", "c-1", "0");                      // one round, two rounds, remove
+        assertEquals(4, storage.saveCount);                       // round, rounds, remove, exit
+    }
+
+    @Test
+    void endOfInputAlsoSaves() {
+        run("3");
+        assertEquals(1, storage.saveCount);
+    }
+
+    @Test
+    void aFailedSaveIsReportedButTheMenuKeepsWorking() {
+        storage.failOnSave = true;
+        String output = run("3", "0");
+        assertTrue(output.contains("Warning: could not save data: disk full"));
+        assertTrue(output.contains("Goodbye."));
+        assertFalse(output.contains("Data saved."));
     }
 }

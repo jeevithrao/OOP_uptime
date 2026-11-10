@@ -6,9 +6,11 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Decides when an outage is real and tells listeners about it (Subject in the Observer pattern).
@@ -103,6 +105,49 @@ public class IncidentManager {
         LocalDateTime end = when.isBefore(open.getStartTime()) ? open.getStartTime() : when;
         open.resolve(end, reason);
         return Optional.of(open);
+    }
+
+    /**
+     * Loads saved incidents into a fresh manager (used at startup). Open incidents become active
+     * again, so the next success resolves them, and numbering continues after the highest saved id.
+     * Validates everything first and changes nothing if the data is inconsistent.
+     * Listeners are not notified: these events already happened in an earlier session.
+     */
+    public void restoreHistory(List<Incident> saved) {
+        if (!history.isEmpty() || !openIncidents.isEmpty()) {
+            throw new IllegalStateException("History can only be restored into an empty manager");
+        }
+        Set<String> seenIds = new HashSet<>();
+        Map<String, Incident> opens = new HashMap<>();
+        int highest = 0;
+        for (Incident incident : saved) {
+            if (!seenIds.add(incident.getId())) {
+                throw new IllegalArgumentException("Duplicate incident id " + incident.getId());
+            }
+            if (incident.isOpen() && opens.put(incident.getServiceId(), incident) != null) {
+                throw new IllegalArgumentException("More than one open incident for service " + incident.getServiceId());
+            }
+            highest = Math.max(highest, numberOf(incident.getId()));
+        }
+        // Everything is valid: apply it.
+        history.addAll(saved);
+        openIncidents.putAll(opens);
+        for (Incident open : opens.values()) {
+            consecutiveFailures.put(open.getServiceId(), open.getFailureCount());   // the outage is still counting
+        }
+        nextIncidentNumber = Math.max(nextIncidentNumber, highest + 1);
+    }
+
+    /** "INC-12" gives 12; ids in any other shape do not affect numbering. */
+    private static int numberOf(String id) {
+        if (id.startsWith("INC-")) {
+            try {
+                return Integer.parseInt(id.substring(4));
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+        return 0;
     }
 
     // ---------------- observer registration ----------------

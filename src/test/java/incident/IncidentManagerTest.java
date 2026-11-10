@@ -303,4 +303,67 @@ class IncidentManagerTest {
         assertThrows(IllegalArgumentException.class, () ->
                 new Incident("I", "a", "A", T0, null, IncidentStatus.OPEN, 3, "why"));
     }
+
+    // ---------- restoreHistory (loading saved incidents at startup) ----------
+
+    private static Incident saved(String id, String service, boolean open, int failures) {
+        return open ? new Incident(id, service, service, T0, null, IncidentStatus.OPEN, failures)
+                    : new Incident(id, service, service, T0, T0.plusSeconds(5), IncidentStatus.RESOLVED, failures);
+    }
+
+    @Test
+    void restoreHistory_bringsBackHistoryAndOpenIncidents_withoutNotifying() {
+        manager.restoreHistory(List.of(saved("INC-1", "a", false, 4), saved("INC-2", "b", true, 5)));
+        assertEquals(2, manager.getHistory().size());
+        assertTrue(manager.hasOpenIncident("b"));
+        assertFalse(manager.hasOpenIncident("a"));
+        assertEquals(5, manager.getConsecutiveFailures("b"));   // the outage is still counting
+        assertTrue(listener.events.isEmpty());
+    }
+
+    @Test
+    void aRestoredOpenIncidentCanBeResolvedByTheNextSuccess() {
+        manager.restoreHistory(List.of(saved("INC-1", "a", true, 3)));
+        feed("a", UP);
+        assertEquals(IncidentStatus.RESOLVED, manager.getHistory().get(0).getStatus());
+        assertEquals(List.of("RESOLVED INC-1"), listener.events);
+    }
+
+    @Test
+    void aRestoredOpenIncidentKeepsCountingFailures_withoutOpeningASecondOne() {
+        manager.restoreHistory(List.of(saved("INC-1", "a", true, 3)));
+        feed("a", DOWN);
+        assertEquals(1, manager.getHistory().size());
+        assertEquals(4, manager.getHistory().get(0).getFailureCount());
+    }
+
+    @Test
+    void numberingContinuesAfterTheHighestSavedId() {
+        manager.restoreHistory(List.of(saved("INC-7", "a", false, 3), saved("INC-3", "b", false, 3)));
+        feed("c", DOWN, DOWN, DOWN);
+        assertEquals("INC-8", manager.getHistory().get(2).getId());
+    }
+
+    @Test
+    void idsInAnotherShapeDoNotBreakNumbering() {
+        manager.restoreHistory(List.of(saved("custom", "a", false, 3), saved("INC-x", "b", false, 3)));
+        feed("c", DOWN, DOWN, DOWN);
+        assertEquals("INC-1", manager.getHistory().get(2).getId());
+    }
+
+    @Test
+    void inconsistentDataIsRejectedAndChangesNothing() {
+        assertThrows(IllegalArgumentException.class, () ->
+                manager.restoreHistory(List.of(saved("INC-1", "a", false, 3), saved("INC-1", "b", false, 3))));
+        assertThrows(IllegalArgumentException.class, () ->
+                manager.restoreHistory(List.of(saved("INC-1", "a", true, 3), saved("INC-2", "a", true, 3))));
+        assertTrue(manager.getHistory().isEmpty());
+        assertTrue(manager.getOpenIncidents().isEmpty());
+    }
+
+    @Test
+    void restoreIsOnlyAllowedIntoAnEmptyManager() {
+        feed("a", DOWN, DOWN, DOWN);
+        assertThrows(IllegalStateException.class, () -> manager.restoreHistory(List.of()));
+    }
 }

@@ -81,4 +81,12 @@ class ServiceFactoryTest {
     void nullSeedSourceIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new ServiceFactory(null));
     }
+
+    @Test
+    void typeNameOfMatchesWhatCreateAccepts() throws InvalidServiceException {
+        for (String type : ServiceFactory.TYPES) {
+            Service s = factory.create(type, "x", "X");
+            assertEquals(type, ServiceFactory.typeNameOf(s));
+        }
+    }
 }

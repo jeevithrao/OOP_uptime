@@ -2,18 +2,25 @@ package console;
 
 import engine.MonitoringEngine;
 import exception.InvalidServiceException;
+import exception.StorageException;
 import healthcheck.HealthResult;
 import incident.Incident;
 import model.Service;
 import model.ServiceFactory;
 import model.ServiceStatus;
+import report.ReportGenerator;
+import report.ReportOrder;
+import report.ServiceReport;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.OptionalDouble;
+import java.util.OptionalInt;
 
 /**
  * The text menu. It only reads input, prints output and calls the engine; every rule lives in
@@ -53,6 +60,9 @@ public class ConsoleMenu {
         } catch (EndOfInput e) {
             out.println();
         }
+        if (save()) {
+            out.println("Data saved.");
+        }
         out.println("Goodbye.");
     }
 
@@ -73,13 +83,13 @@ public class ConsoleMenu {
     /** @return false when the user chose Exit */
     private boolean handle(String choice) {
         switch (choice) {
-            case "1": addService(); break;
-            case "2": removeService(); break;
+            case "1": addService(); save(); break;
+            case "2": removeService(); save(); break;
             case "3": listServices(); break;
-            case "4": runOneRound(); break;
-            case "5": runManyRounds(); break;
+            case "4": runOneRound(); save(); break;
+            case "5": runManyRounds(); save(); break;
             case "6": viewIncidents(); break;
-            case "7": out.println("Reports are not implemented yet."); break;
+            case "7": viewReports(); break;
             case "8": configureThreshold(); break;
             case "9": toggleForcedFailure(); break;
             case "0": return false;
@@ -188,6 +198,45 @@ public class ConsoleMenu {
         }
     }
 
+    private void viewReports() {
+        List<ServiceReport> reports = engine.getReports();
+        if (reports.isEmpty()) {
+            out.println("No services yet. Use option 1 to add one.");
+            return;
+        }
+        out.println("Rank by: 1) uptime  2) average response time  3) name");
+        String choice = prompt("Choice [1]: ");
+        ReportOrder order = ReportOrder.UPTIME;
+        switch (choice) {
+            case "": case "1": break;
+            case "2": order = ReportOrder.RESPONSE_TIME; break;
+            case "3": order = ReportOrder.NAME; break;
+            default: out.println("Unknown choice '" + choice + "', ranking by uptime.");
+        }
+        out.printf("%-10s %-16s %6s %8s %8s %9s %9s %5s %6s %9s%n",
+                "ID", "NAME", "CHECKS", "UPTIME", "RECENT", "AVG ms", "SLOWEST", "SLOW", "FAILED", "INCIDENTS");
+        for (ServiceReport r : ReportGenerator.sort(reports, order)) {
+            out.printf("%-10s %-16s %6d %8s %8s %9s %9s %5d %6d %9d%n", r.serviceId(), r.serviceName(),
+                    r.totalChecks(), percent(r.uptimePercent()), percent(r.recentUptimePercent()),
+                    decimal(r.averageResponseMs()), whole(r.slowestResponseMs()),
+                    r.degradedChecks(), r.failedChecks(), r.incidentCount());
+        }
+        out.println("RECENT = uptime over the last " + ReportGenerator.RECENT_WINDOW + " checks. "
+                + "SLOW = degraded checks. Response times cover successful checks only.");
+    }
+
+    private static String percent(OptionalDouble value) {
+        return value.isPresent() ? String.format(Locale.ROOT, "%.1f%%", value.getAsDouble()) : "n/a";
+    }
+
+    private static String decimal(OptionalDouble value) {
+        return value.isPresent() ? String.format(Locale.ROOT, "%.1f", value.getAsDouble()) : "n/a";
+    }
+
+    private static String whole(OptionalInt value) {
+        return value.isPresent() ? String.valueOf(value.getAsInt()) : "n/a";
+    }
+
     private void configureThreshold() {
         out.println("Current failure threshold: " + engine.getFailureThreshold() + " consecutive failures");
         Integer value = promptInt("New threshold (1 or more): ");
@@ -218,6 +267,22 @@ public class ConsoleMenu {
                     : " is back to normal behaviour."));
         } catch (InvalidServiceException e) {
             out.println(e.getMessage());
+        }
+    }
+
+    // ---------------- saving ----------------
+
+    /**
+     * Saves through the engine. A failed save is reported but never stops the program:
+     * the user can keep working and the next action tries again.
+     */
+    private boolean save() {
+        try {
+            engine.save();
+            return true;
+        } catch (StorageException e) {
+            out.println("Warning: could not save data: " + e.getMessage());
+            return false;
         }
     }
 

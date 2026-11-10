@@ -29,6 +29,14 @@ public class ServiceFactory {
         this.seedSource = seedSource;
     }
 
+    /** The type name that create() accepts for this service; used when saving, so loading can rebuild it. */
+    public static String typeNameOf(Service service) {
+        if (service instanceof DatabaseService) return "database";
+        if (service instanceof ApiService) return "api";
+        if (service instanceof CacheService) return "cache";
+        throw new IllegalArgumentException("Unsupported service class: " + service.getClass().getName());
+    }
+
     /** Creates a service with the default failure rate of its type. */
     public Service create(String type, String id, String name) throws InvalidServiceException {
         return build(type, id, name, null);

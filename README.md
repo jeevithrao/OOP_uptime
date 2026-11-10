@@ -18,13 +18,24 @@ java -cp out Main
 ```
 Windows PowerShell: `javac --release 17 -d out (Get-ChildItem -Recurse src/main/java -Filter *.java).FullName`
 
-Demo mode (reproducible randomness): `java -cp out Main --seed 42`
+Demo mode: `java -cp out Main --seed 42` gives reproducible randomness and a clean start. It uses its
+own `data-demo/` folder, so it never touches your real saved data.
 
 Typical demo: add a service (1), force it down (9), run 4 rounds (5), watch the incident open
 and the alerts fire, clear the force (9), run a round (4) and watch it recover. Alerts are also
 written to `data/alerts.log`, and everything is logged to `data/monitor.log`.
 
 With Maven: `mvn test` runs the tests, `mvn compile` builds.
+
+## Saved data
+Everything is saved automatically after each change (add, remove, check rounds) and on exit, into
+CSV files in `data/`: `services.csv`, `results.csv`, `incidents.csv`. They are loaded at startup,
+so incidents that were open when you quit are still open (and resolve when the service recovers).
+If a file is corrupt the program refuses to start and names the file and line, so nothing is
+overwritten; fix or delete the file. Not saved on purpose: demo force-failure switches, the
+failure threshold, and round numbers.
+
+Logs: `data/monitor.log` (everything) and `data/alerts.log` (alerts only).
 
 ## Package structure (`src/main/java`)
 | Package | Responsibility |
@@ -33,7 +44,7 @@ With Maven: `mvn test` runs the tests, `mvn compile` builds.
 | `healthcheck` | Probing a service and judging the result |
 | `incident` | Consecutive-failure tracking, opening/resolving incidents |
 | `notification` | Delivering alerts through different channels |
-| `report` | Uptime, response-time statistics, rankings |
+| `report` | Uptime, response-time statistics, rankings (read-only) |
 | `storage` | File persistence and logging |
 | `exception` | Custom checked exceptions |
 | `engine` | Coordinates all modules (`MonitoringEngine`, Singleton) |
@@ -45,7 +56,7 @@ With Maven: `mvn test` runs the tests, `mvn compile` builds.
 - [x] Phase 2: health checking
 - [x] Phase 3: incidents and alerts
 - [x] Phase 4: engine and console menu
-- [ ] Phase 5: reports and storage
+- [x] Phase 5: reports and storage
 - [ ] Phase 6: UML and documentation
 
 Design decisions and the reasoning behind them are logged in

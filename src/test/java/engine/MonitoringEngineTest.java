@@ -1,7 +1,9 @@
 package engine;
 
 import exception.InvalidServiceException;
+import exception.StorageException;
 import healthcheck.HealthCheckerFactory;
+import healthcheck.HealthResult;
 import incident.Incident;
 import incident.IncidentListener;
 import incident.IncidentManager;
@@ -15,11 +17,15 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import report.ServiceReport;
 import storage.AppLogger;
+import storage.ServiceRecord;
+import storage.StorageData;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -30,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class MonitoringEngineTest {
 
     private final List<String> events = new ArrayList<>();
+    private final InMemoryStorage storage = new InMemoryStorage();
     private IncidentManager manager;
     private MonitoringEngine engine;
     private Path logFile;
@@ -44,7 +51,7 @@ class MonitoringEngineTest {
             @Override public void onIncidentResolved(Incident i) { events.add("RESOLVED " + i.getId()); }
         });
         engine = new MonitoringEngine(new ServiceFactory(new Random(1)),
-                HealthCheckerFactory.create("latency"), manager, AppLogger.getInstance());
+                HealthCheckerFactory.create("latency"), manager, AppLogger.getInstance(), storage);
     }
 
     @AfterEach
@@ -232,6 +239,159 @@ class MonitoringEngineTest {
     @Test
     void nullDependenciesAreRejected() {
         assertThrows(IllegalArgumentException.class,
-                () -> new MonitoringEngine(null, HealthCheckerFactory.create("basic"), manager, AppLogger.getInstance()));
+                () -> new MonitoringEngine(null, HealthCheckerFactory.create("basic"), manager, AppLogger.getInstance(), storage));
+    }
+
+    // ---------- reports ----------
+
+    @Test
+    void reportsReflectTheChecksAndIncidents() throws InvalidServiceException {
+        engine.addService(reliable("a"));
+        engine.runRounds(2, null);
+        engine.setForceFailure("a", true);
+        engine.runRounds(3, null);
+
+        ServiceReport r = engine.getReports().get(0);
+        assertEquals("a", r.serviceId());
+        assertEquals(5, r.totalChecks());
+        assertEquals(2, r.upChecks());
+        assertEquals(3, r.failedChecks());
+        assertEquals(40.0, r.uptimePercent().getAsDouble(), 1e-9);
+        assertEquals(1, r.incidentCount());
+        assertEquals(3, r.downtimeRounds());
+        assertTrue(r.averageResponseMs().isPresent());
+    }
+
+    @Test
+    void aServiceWithNoChecksHasNoReportData() throws InvalidServiceException {
+        engine.addService(reliable("a"));
+        ServiceReport r = engine.getReports().get(0);
+        assertEquals(0, r.totalChecks());
+        assertTrue(r.uptimePercent().isEmpty());
+    }
+
+    // ---------- saving and loading ----------
+
+    private MonitoringEngine secondEngine(List<String> eventsOut) {
+        IncidentManager m = new IncidentManager();
+        m.addListener(new IncidentListener() {
+            @Override public void onIncidentOpened(Incident i) { eventsOut.add("OPENED " + i.getId()); }
+            @Override public void onIncidentResolved(Incident i) { eventsOut.add("RESOLVED " + i.getId()); }
+        });
+        return new MonitoringEngine(new ServiceFactory(new Random(2)),
+                HealthCheckerFactory.create("latency"), m, AppLogger.getInstance(), storage);
+    }
+
+    private static List<String> idsOf(MonitoringEngine e) {
+        return e.getServices().stream().map(Service::getId).toList();
+    }
+
+    @Test
+    void aSavedSessionIsFullyRestored_andMonitoringContinuesFromIt() throws Exception {
+        engine.addService(reliable("a"));
+        engine.addService(reliable("b"));
+        engine.setForceFailure("a", true);
+        engine.runRounds(4, null);
+        engine.save();
+
+        List<String> events2 = new ArrayList<>();
+        MonitoringEngine restored = secondEngine(events2);
+        restored.load();
+
+        assertEquals(List.of("a", "b"), idsOf(restored));
+        assertEquals("Cache a", restored.getService("a").getName());
+        assertEquals(0.0, restored.getService("a").getFailureRate());
+        assertEquals(ServiceStatus.DOWN, restored.getService("a").getStatus());
+        assertEquals(ServiceStatus.UP, restored.getService("b").getStatus());
+        assertEquals(4, restored.getResults("a").size());
+        assertEquals(1, restored.getOpenIncidents().size());
+        assertEquals(4, restored.getOpenIncidents().get(0).getFailureCount());
+        assertEquals(0, restored.getRoundCount());                       // rounds belong to one session
+        assertFalse(restored.getService("a").isForceFailure());          // demo switches are not saved
+
+        restored.runRound(null);                                         // no longer forced: "a" answers
+        assertEquals(List.of("RESOLVED INC-1"), events2);
+
+        restored.setForceFailure("a", true);
+        restored.runRounds(3, null);
+        assertEquals("INC-2", restored.getOpenIncidents().get(0).getId());   // numbering continues
+    }
+
+    @Test
+    void savedServiceRecordsUseTheFactoryTypeName() throws Exception {
+        engine.addService(reliable("a"));
+        engine.save();
+        assertEquals("cache", storage.saved.services().get(0).type());
+    }
+
+    @Test
+    void loadingIntoANonEmptyEngineIsRefused() throws Exception {
+        engine.addService(reliable("a"));
+        assertThrows(IllegalStateException.class, () -> engine.load());
+    }
+
+    private static ServiceRecord record(String type, String id, double rate) {
+        return new ServiceRecord(type, id, "Name " + id, rate, ServiceStatus.UP);
+    }
+
+    @Test
+    void invalidSavedServicesAreStorageExceptions_andLeaveTheEngineEmpty() {
+        storage.saved = new StorageData(List.of(record("cache", "good", 0.1), record("cache", "bad", 2.0)),
+                List.of(), List.of());
+        assertThrows(StorageException.class, () -> engine.load());
+        assertTrue(engine.getServices().isEmpty());
+
+        storage.saved = new StorageData(List.of(record("fancy", "x", 0.1)), List.of(), List.of());
+        assertThrows(StorageException.class, () -> engine.load());
+        assertTrue(engine.getServices().isEmpty());
+    }
+
+    @Test
+    void duplicateSavedServiceIdsAreRejected() {
+        storage.saved = new StorageData(List.of(record("cache", "a", 0.1), record("api", "a", 0.1)),
+                List.of(), List.of());
+        assertThrows(StorageException.class, () -> engine.load());
+    }
+
+    @Test
+    void inconsistentIncidentsAbortTheWholeLoad() {
+        LocalDateTime t = LocalDateTime.of(2026, 1, 1, 10, 0);
+        storage.saved = new StorageData(List.of(record("cache", "a", 0.1)), List.of(),
+                List.of(new Incident("INC-1", "a", "A", t, t.plusSeconds(1), IncidentStatus.RESOLVED, 3),
+                        new Incident("INC-1", "a", "A", t, t.plusSeconds(1), IncidentStatus.RESOLVED, 3)));
+        assertThrows(StorageException.class, () -> engine.load());
+        assertTrue(engine.getServices().isEmpty());                 // all-or-nothing: no half-loaded engine
+        assertTrue(engine.getIncidentHistory().isEmpty());
+    }
+
+    @Test
+    void resultsOfUnknownServicesAreIgnored() throws Exception {
+        LocalDateTime t = LocalDateTime.of(2026, 1, 1, 10, 0);
+        storage.saved = new StorageData(List.of(record("cache", "c", 0.0)),
+                List.of(new HealthResult("c", t, ServiceStatus.UP, 3, ""),
+                        new HealthResult("ghost", t, ServiceStatus.UP, 3, "")),
+                List.of());
+        engine.load();
+        assertEquals(1, engine.getResults("c").size());
+    }
+
+    @Test
+    void anOpenIncidentOfAMissingServiceIsClosedWithANote() throws Exception {
+        LocalDateTime t = LocalDateTime.of(2026, 1, 1, 10, 0);
+        storage.saved = new StorageData(List.of(), List.of(),
+                List.of(new Incident("INC-1", "ghost", "Ghost", t, null, IncidentStatus.OPEN, 3)));
+        engine.load();
+        assertTrue(engine.getOpenIncidents().isEmpty());
+        Incident closed = engine.getIncidentHistory().get(0);
+        assertEquals(IncidentStatus.RESOLVED, closed.getStatus());
+        assertTrue(closed.getResolutionNote().contains("missing"));
+    }
+
+    @Test
+    void storageFailuresPropagateToTheCaller() throws Exception {
+        storage.failOnSave = true;
+        assertThrows(StorageException.class, () -> engine.save());
+        storage.failOnLoad = true;
+        assertThrows(StorageException.class, () -> engine.load());
     }
 }
