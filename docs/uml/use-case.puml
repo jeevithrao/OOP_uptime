@@ -1,0 +1,44 @@
+@startuml
+title Use Case Diagram - Service Health Monitor
+left to right direction
+skinparam shadowing false
+
+actor "Administrator" as Admin
+actor "Alert Channels\n(console, file, email)" as Channels
+actor "File System\n(CSV data, logs)" as Files
+
+rectangle "Service Health Monitor" {
+  usecase "Add service" as UC1
+  usecase "Remove service" as UC2
+  usecase "List services and status" as UC3
+  usecase "Run one check round" as UC4
+  usecase "Run monitoring (N rounds)" as UC5
+  usecase "View incidents" as UC6
+  usecase "View reports" as UC7
+  usecase "Configure failure threshold" as UC8
+  usecase "Force a service to fail\n(demo mode)" as UC9
+  usecase "Evaluate incident rules" as UC10
+  usecase "Send alerts" as UC11
+  usecase "Save and load data" as UC12
+}
+
+Admin --> UC1
+Admin --> UC2
+Admin --> UC3
+Admin --> UC4
+Admin --> UC5
+Admin --> UC6
+Admin --> UC7
+Admin --> UC8
+Admin --> UC9
+
+UC5 ..> UC4 : <<include>>
+UC4 ..> UC10 : <<include>>
+UC10 ..> UC11 : <<include>>
+UC1 ..> UC12 : <<include>>
+UC2 ..> UC12 : <<include>>
+UC4 ..> UC12 : <<include>>
+
+UC11 --> Channels
+UC12 --> Files
+@enduml

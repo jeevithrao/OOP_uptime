@@ -1,0 +1,100 @@
+@startuml
+title Class Diagram - Supporting modules (engine, console, reports, storage, logging)
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+hide empty members
+
+class Main {
+  +main(args : String[])
+}
+
+package console {
+  class ConsoleMenu {
+    -in : BufferedReader
+    -out : PrintStream
+    +run()
+  }
+}
+
+package engine {
+  class MonitoringEngine <<Singleton>> {
+    +runRound(observer)
+    +getReports() : List<ServiceReport>
+    +save()
+    +load()
+  }
+  interface CheckObserver <<functional, nested in MonitoringEngine>> {
+    +onCheck(round, service, result, consecutiveFailures)
+  }
+}
+
+package report {
+  class ReportGenerator <<utility>> {
+    +forService(id, name, results, incidents) : ServiceReport
+    +recent(results, n) : List<HealthResult>
+    +sort(reports, order) : List<ServiceReport>
+  }
+  class ServiceReport <<record>> {
+    totalChecks, upChecks, degradedChecks, failedChecks
+    uptimePercent, recentUptimePercent
+    averageResponseMs, slowestResponseMs
+    incidentCount, downtimeRounds
+  }
+  enum ReportOrder {
+    UPTIME
+    RESPONSE_TIME
+    NAME
+  }
+}
+
+package storage {
+  interface Storage {
+    +save(data : StorageData)
+    +load() : StorageData
+  }
+  class FileStorage {
+    -directory : Path
+  }
+  class StorageData <<record>> {
+    services : List<ServiceRecord>
+    results : List<HealthResult>
+    incidents : List<Incident>
+  }
+  class ServiceRecord <<record>> {
+    type, id, name, failureRate, status
+  }
+  class Csv <<package-private>> {
+    +join(fields) : String
+    +split(line) : List<String>
+  }
+  class AppLogger <<Singleton>> {
+    +getInstance() : AppLogger
+    +info(message)
+    +warn(message)
+    +error(message)
+  }
+}
+
+class HealthResult
+class Incident
+class StorageException <<checked>>
+
+Main ..> MonitoringEngine : creates
+Main ..> ConsoleMenu : starts
+ConsoleMenu --> MonitoringEngine : calls
+ConsoleMenu ..> ReportGenerator : ranks reports
+MonitoringEngine ..> CheckObserver : notifies
+ConsoleMenu ..> CheckObserver : supplies a method reference\n(prints each check)
+MonitoringEngine --> Storage : save / load
+MonitoringEngine --> AppLogger : logs
+MonitoringEngine ..> ReportGenerator : builds reports
+ReportGenerator ..> ServiceReport : returns
+ReportGenerator ..> ReportOrder : sorts by
+Storage <|.. FileStorage
+FileStorage ..> Csv : reads and writes
+Storage ..> StorageData
+StorageData o-- "0..*" ServiceRecord
+StorageData o-- "0..*" HealthResult
+StorageData o-- "0..*" Incident
+Storage ..> StorageException : throws
+@enduml

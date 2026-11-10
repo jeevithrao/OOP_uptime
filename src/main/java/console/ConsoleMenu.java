@@ -46,6 +46,7 @@ public class ConsoleMenu {
 
     /** Thrown internally when input ends (Ctrl+D / Ctrl+Z, or a script runs out), to leave the loop cleanly. */
     private static final class EndOfInput extends RuntimeException {
+        private static final long serialVersionUID = 1L;
         EndOfInput() { super("end of input", null, false, false); }
     }
 

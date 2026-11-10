@@ -1,0 +1,40 @@
+@startuml
+title Activity - the check cycle (one round)
+skinparam shadowing false
+
+start
+if (any services registered?) then (no)
+  :Tell the user there is nothing to check;
+  stop
+else (yes)
+endif
+:Increase the round number;
+while (more services in this round?) is (yes)
+  :Take the next service;
+  :HealthChecker.check(service) gives a HealthResult;
+  :Engine sets the service status from the result;
+  :Store the result and write it to the log;
+  :CheckObserver shows the round line (streak includes this check);
+  if (result successful? (UP or DEGRADED)) then (yes)
+    :Reset the failure streak to 0;
+    if (open incident for this service?) then (yes)
+      :Resolve the incident (end time = this check);
+      :Notify listeners: RECOVERED;
+    else (no)
+    endif
+  else (no, DOWN)
+    :Streak = streak + 1;
+    if (open incident for this service?) then (yes)
+      :Increase the incident failure count;
+    else (no)
+      if (streak >= threshold?) then (yes)
+        :Open a new incident;
+        :Notify listeners: DOWN;
+      else (no)
+      endif
+    endif
+  endif
+endwhile (no)
+:Save services, results and incidents (Storage);
+stop
+@enduml

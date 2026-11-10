@@ -126,3 +126,14 @@ Every non-obvious choice, with the reason. Useful for the viva.
 | Demo mode (`--seed`) starts empty and uses `data-demo/` | Demos are reproducible and can never overwrite real data. |
 | 19 new tests plus 7 mutation checks (average includes failures, uptime ignores degraded, ranking reversed, CSV unquoted, open incidents of missing services kept, numbering restarts, no save after a run) | Each injected bug made tests fail. |
 | End-to-end check with two real processes sharing a `data/` folder, then a corrupted file | Proves the data really survives a restart, beyond what unit tests with in-memory fakes can show. |
+
+## Phase 6: UML, documentation and cleanup
+| Decision | Why |
+|---|---|
+| Diagrams written as PlantUML text, rendered to PNG and SVG and committed | Text diffs well in git, can be regenerated, and the renderer verifies the syntax. Visual Paradigm cannot import PlantUML, so the diagrams are redrawn there from these. |
+| Two class diagrams (core, supporting) instead of one | One diagram with 40 classes is unreadable. The core one covers exactly what the plan lists (hierarchy, checkers, incidents, notifiers, exceptions, multiplicities). |
+| Sequence diagram follows the plan's path (Engine, Checker, Service, IncidentManager, Notifier) and also shows the observer callback and the logging listener | It matches what the code really does, including the ordering rule (round line before alert). |
+| `ConsoleMenu` is drawn as supplying a method reference to `CheckObserver`, not implementing it | An early draft drew it as implementing the interface; the code passes `this::printCheck`. The diagram must match the code. |
+| `serialVersionUID` added to the five exceptions and the private `EndOfInput` | Exceptions are Serializable; this silences every `-Xlint:all` warning, so the build is warning-free. |
+| `RetryingHealthChecker` (Decorator) and the Adapter were NOT built | They are optional in the plan, which says to finish the four required patterns first. A decorator that nothing in the menu can select would be unreachable code. |
+| A project guide (`docs/PROJECT_GUIDE.md`) was written | One place that explains every module, decision, trade-off and likely viva question. |

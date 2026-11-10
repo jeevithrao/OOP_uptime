@@ -1,0 +1,47 @@
+@startuml
+title Sequence - one check that fails for the third time (threshold = 3)
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+
+actor Administrator
+participant ConsoleMenu
+participant MonitoringEngine as Engine
+participant LatencyHealthChecker as Checker
+participant BasicHealthChecker as Basic
+participant "Payments API\n(ApiService)" as Service
+participant IncidentManager as Manager
+participant Incident
+participant "Notifiers\n(console, file, email)" as Notifiers
+participant AppLogger as Log
+
+Administrator -> ConsoleMenu : choose "4. Run one check round"
+ConsoleMenu -> Engine : runRound(observer)
+note over Engine : Payments API already has 2 failures in a row
+
+Engine -> Checker : check(service)
+Checker -> Basic : check(service)
+Basic -> Service : simulateRequest()
+Service --> Basic : throws ServiceTimeoutException
+Basic --> Checker : HealthResult.down(id, message)
+Checker --> Engine : HealthResult (status DOWN)
+
+Engine -> Service : setStatus(DOWN)
+Engine -> Log : warn("[Round n] ... DOWN")
+Engine -> ConsoleMenu : observer.onCheck(round, service, result, streak = 3)
+ConsoleMenu --> Administrator : "[Round n] Payments API  FAIL ...  failures: 3"
+
+Engine -> Manager : recordResult(result, "Payments API")
+note right of Manager
+  streak becomes 3
+  3 >= threshold (3)
+  and no open incident yet
+end note
+create Incident
+Manager -> Incident : new Incident(INC-1, ... failureCount = 3)
+Manager -> Notifiers : onIncidentOpened(incident)
+Notifiers --> Administrator : "[ALERT -> console] Payments API is DOWN ..."
+Manager -> Log : warn("Incident INC-1 OPENED ...") (engine's logging listener)
+
+Engine --> ConsoleMenu : round results
+ConsoleMenu -> Engine : save()
+@enduml

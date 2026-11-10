@@ -1,0 +1,166 @@
+@startuml
+title Class Diagram - Core (services, health checking, incidents, alerts, exceptions)
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+hide empty members
+
+package model {
+  enum ServiceStatus {
+    UP
+    DEGRADED
+    DOWN
+  }
+  enum IncidentStatus {
+    OPEN
+    RESOLVED
+  }
+  abstract class Service {
+    -id : String
+    -name : String
+    -failureRate : double
+    -status : ServiceStatus
+    -forceFailure : boolean
+    -random : Random
+    +simulateRequest() : int
+    #{abstract} doSimulateRequest() : int
+    #shouldFail() : boolean
+    #chance(probability : double) : boolean
+    #between(min : int, max : int) : int
+    +setStatus(status : ServiceStatus)
+    +setForceFailure(forced : boolean)
+  }
+  class DatabaseService {
+    rare failures, occasional slow queries
+  }
+  class ApiService {
+    latency spikes, 503 or timeout
+  }
+  class CacheService {
+    very fast, occasionally drops
+  }
+  class ServiceFactory {
+    +create(type, id, name) : Service
+    +typeNameOf(service) : String
+  }
+}
+
+package healthcheck {
+  interface HealthChecker {
+    +check(service : Service) : HealthResult
+  }
+  class BasicHealthChecker
+  class LatencyHealthChecker {
+    -slowThresholdMs : int
+  }
+  class HealthCheckerFactory {
+    +create(type : String) : HealthChecker
+  }
+  class HealthResult <<immutable>> {
+    -serviceId : String
+    -timestamp : LocalDateTime
+    -status : ServiceStatus
+    -responseTimeMs : int
+    -errorMessage : String
+    +isSuccess() : boolean
+  }
+}
+
+package incident {
+  interface IncidentListener {
+    +onIncidentOpened(incident : Incident)
+    +onIncidentResolved(incident : Incident)
+  }
+  class IncidentManager <<Subject>> {
+    -threshold : int
+    -consecutiveFailures : Map<String,Integer>
+    -openIncidents : Map<String,Incident>
+    +recordResult(result : HealthResult, name : String)
+    +addListener(l : IncidentListener)
+    +removeListener(l : IncidentListener)
+    +forgetService(id, when, reason) : Optional<Incident>
+    +restoreHistory(saved : List<Incident>)
+  }
+  class Incident {
+    -id : String
+    -serviceId : String
+    -serviceName : String
+    -startTime : LocalDateTime
+    -endTime : LocalDateTime
+    -status : IncidentStatus
+    -failureCount : int
+    -resolutionNote : String
+  }
+}
+
+package notification {
+  abstract class Notifier {
+    #{abstract} channelName() : String
+    #{abstract} deliver(message : String)
+    +onIncidentOpened(incident : Incident)
+    +onIncidentResolved(incident : Incident)
+  }
+  class ConsoleNotifier
+  class FileNotifier
+  class EmailNotifier
+}
+
+package exception {
+  class MonitorException <<checked>>
+  class ServiceDownException
+  class ServiceTimeoutException
+  class InvalidServiceException
+  class StorageException
+}
+
+package engine {
+  class MonitoringEngine <<Singleton>> {
+    -instance : MonitoringEngine
+    +getInstance() : MonitoringEngine
+    +initialize(seed : long) : MonitoringEngine
+    +addService(type, id, name) : Service
+    +removeService(id) : Optional<Incident>
+    +runRound(observer) : List<HealthResult>
+    +runRounds(count, observer)
+    +setForceFailure(id, forced)
+    +save()
+    +load()
+  }
+}
+
+Service <|-- DatabaseService
+Service <|-- ApiService
+Service <|-- CacheService
+Service --> ServiceStatus
+ServiceFactory ..> Service : creates
+
+HealthChecker <|.. BasicHealthChecker
+HealthChecker <|.. LatencyHealthChecker
+LatencyHealthChecker *-- "1" BasicHealthChecker : reuses
+HealthCheckerFactory ..> HealthChecker : creates
+HealthChecker ..> Service : probes
+HealthChecker ..> HealthResult : returns
+HealthResult --> ServiceStatus
+
+IncidentListener <|.. Notifier
+Notifier <|-- ConsoleNotifier
+Notifier <|-- FileNotifier
+Notifier <|-- EmailNotifier
+IncidentManager o-- "0..*" IncidentListener : listeners
+IncidentManager *-- "0..*" Incident : history
+IncidentManager ..> HealthResult : consumes
+Incident --> IncidentStatus
+Notifier ..> Incident : formats alert
+
+MonitorException <|-- ServiceDownException
+MonitorException <|-- ServiceTimeoutException
+MonitorException <|-- InvalidServiceException
+MonitorException <|-- StorageException
+Service ..> ServiceDownException : throws
+Service ..> ServiceTimeoutException : throws
+ServiceFactory ..> InvalidServiceException : throws
+
+MonitoringEngine "1" o-- "0..*" Service : services
+MonitoringEngine --> HealthChecker : uses
+MonitoringEngine --> IncidentManager : uses
+MonitoringEngine --> ServiceFactory : uses
+@enduml
