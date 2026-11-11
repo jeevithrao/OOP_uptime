@@ -104,16 +104,19 @@ Engine asks Health Check to check a Service, passes the result to Incident, Inci
 
 ## 5. Walkthrough: one failure, start to finish
 
-This is real output from the program (forced failure on a service called "Payments, EU", threshold 3):
+This is genuine output from the program (a service called "Payments, EU", forced down with option 9, threshold 3, then switched back to normal). The file notifier writes the same alert to `data/alerts.log`, so it does not appear on screen:
 
 ```
+[Round 1] Payments, EU   FAIL      (Payments, EU is forced down (demo mode))    failures: 1
+[Round 2] Payments, EU   FAIL      (Payments, EU is forced down (demo mode))    failures: 2
 [Round 3] Payments, EU   FAIL      (Payments, EU is forced down (demo mode))    failures: 3
-[ALERT -> console] Payments, EU is DOWN (INC-1, 3 consecutive failures, since 05:50:32)
-[EMAIL sent to ops@example.com] [ALERT -> email] Payments, EU is DOWN (INC-1, 3 consecutive failures, since 05:50:32)
+[ALERT -> console] Payments, EU is DOWN (INC-1, 3 consecutive failures, since 02:23:41)
+[EMAIL sent to ops@example.com] [ALERT -> email] Payments, EU is DOWN (INC-1, 3 consecutive failures, since 02:23:41)
 [Round 4] Payments, EU   FAIL      (Payments, EU is forced down (demo mode))    failures: 4
-...
-[Round 1] Payments, EU   DEGRADED  (574 ms)                                     failures: 0
-[ALERT -> console] Payments, EU has RECOVERED (INC-1, downtime: 4 rounds)
+[Round 5] Payments, EU   FAIL      (Payments, EU is forced down (demo mode))    failures: 5
+[Round 6] Payments, EU   OK        (199 ms)                                     failures: 0
+[ALERT -> console] Payments, EU has RECOVERED (INC-1, downtime: 5 rounds)
+[EMAIL sent to ops@example.com] [ALERT -> email] Payments, EU has RECOVERED (INC-1, downtime: 5 rounds)
 ```
 
 What happened, in order:
@@ -127,7 +130,7 @@ What happened, in order:
 7. **`IncidentManager.recordResult`** increments the streak to 3, sees `3 >= threshold` and no open incident, creates `INC-1`, and notifies all listeners.
 8. **Listeners**: the console prints the alert, the file notifier appends a line to `alerts.log`, the email notifier prints "email sent", and the engine's logging listener writes to `monitor.log`.
 9. **After the round** the menu asks the engine to save.
-10. **On recovery** the first successful (UP or DEGRADED) check resets the streak and resolves the incident; listeners get "RECOVERED". The downtime shown (4 rounds) is the incident's failure count.
+10. **On recovery** the first successful (UP or DEGRADED) check resets the streak and resolves the incident; listeners get "RECOVERED". The downtime shown (5 rounds in this run) is the incident's failure count.
 
 ## 6. Module by module
 
