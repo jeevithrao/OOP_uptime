@@ -563,6 +563,7 @@ mvn test
 
 | Document | What is inside |
 |---|---|
+- [docs/CODE_WALKTHROUGH.md](docs/CODE_WALKTHROUGH.md): every source file in full, explained block by block, plus tests and a Java cheat sheet
 | [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) | The full explanation of every module, the decisions behind them and viva questions |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | The decision log, phase by phase |
 | [`docs/uml/`](docs/uml/) | All UML sources and exports |
